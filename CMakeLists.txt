@@ -1,0 +1,5 @@
+cmake_minimum_required(VERSION 3.0)
+project(raytracer)
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++14 -Wall -Wextra -pedantic -fno-rtti -fno-exceptions")
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR})
+add_executable(raytracer main.cpp)
