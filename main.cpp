@@ -4,6 +4,7 @@
 #include <math.h>
 #include <float.h>
 #include <random>
+#include <memory>
 
 #define PI 3.14159265359f
 
@@ -113,6 +114,8 @@ static float dot(vec3 v1, vec3 v2) { return v1.x * v2.x + v1.y * v2.y + v1.z * v
 static float length(vec3 v)   { return sqrtf(v.x * v.x + v.y * v.y + v.z * v.z); }
 static vec3 normalize(vec3 v) { return v * (1.f / length(v)); }
 static vec3 cross(vec3 v, vec3 w) { return { v.y * w.z - v.z * w.y, v.z * w.x - v.x * w.z, v.x * w.y - v.y * w.x }; }
+// n must be normalized
+static vec3 reflect(vec3 toReflect, vec3 n) { return dot(toReflect, n) * n * -2.f + toReflect; }
 
 struct mat3
 {
@@ -125,10 +128,13 @@ static vec3 operator*(const mat3& m, vec3 v) { return v.x * m.i + v.y * m.j + v.
 
 static float toRadians(float degrees) { return degrees / 360.f * 2.f * PI; }
 
-float random01(std::mt19937& rng)
+static std::mt19937* _rng = nullptr;
+
+float random01()
 {
+    assert(_rng);
     static std::uniform_real_distribution<float> d(0.f, 1.f);
-    return d(rng);
+    return d(*_rng);
 }
 
 static void writeToFile(const char* filename, const vec3* data, const ivec2 size)
@@ -145,6 +151,19 @@ static void writeToFile(const char* filename, const vec3* data, const ivec2 size
     fclose(file);
 }
 
+static vec3 unitSphereSample()
+{
+    vec3 p(1.f);
+
+    while(length(p) > 1.f)
+    {
+        p = 2.f * vec3(random01(), random01(), random01()) - vec3(1.f);
+    }
+
+    return p;
+}
+
+// dir must be normalized
 struct Ray
 {
     vec3 origin;
@@ -175,20 +194,39 @@ static Ray getCameraRay(const Camera& camera, vec2 fragPos, ivec2 imageSize)
     return {camera.pos, normalize(mat3{right, up, camera.dir} * offset)};
 }
 
-struct Hit
+struct ScatterData
+{
+    // input
+    Ray inputRay;
+    vec3 point;
+    vec3 normal;
+    // output
+    Ray outputRay;
+    vec3 attenuation;
+};
+
+struct Material
+{
+    // returns false if ray is absorbed
+    virtual bool scatter(ScatterData& sdata) = 0;
+};
+
+struct Collision
 {
     float distance;
     vec3 point;
     vec3 normal;
+    Material* material;
 };
 
 struct Sphere
 {
     vec3 pos;
     float radius;
+    Material* material;
 };
 
-static bool hits(const Ray& ray, const Sphere& sphere, Hit& hit, float maxDistance)
+static bool collides(const Ray& ray, const Sphere& sphere, Collision& collision, float minDistance, float maxDistance)
 {
     vec3 sphereToRay = ray.origin - sphere.pos;
     float a = dot(ray.dir, ray.dir);
@@ -203,11 +241,12 @@ static bool hits(const Ray& ray, const Sphere& sphere, Hit& hit, float maxDistan
             int sign = i * 2 - 1;
             float root = (-b + sign * sqrtf(discriminant)) / 2.f;
 
-            if(root <= maxDistance && root > 0.f)
+            if(root >= minDistance && root <= maxDistance)
             {
-                hit.distance = root;
-                hit.point = ray.origin + ray.dir * root;
-                hit.normal = normalize(hit.point - sphere.pos);
+                collision.distance = root;
+                collision.point = ray.origin + ray.dir * root;
+                collision.normal = normalize(collision.point - sphere.pos);
+                collision.material = &*sphere.material;
                 return true;
             }
         }
@@ -215,31 +254,131 @@ static bool hits(const Ray& ray, const Sphere& sphere, Hit& hit, float maxDistan
     return false;
 }
 
-static vec3 getRayColor(const Ray& ray, const std::vector<Sphere>& spheres)
+static vec3 getRayColor(const Ray& ray, int depth, const std::vector<Sphere>& spheres)
 {
     float maxDistance = FLT_MAX;
-    Hit hit;
+    Collision collision;
 
     for(const Sphere& sphere: spheres)
     {
-        if(hits(ray, sphere, hit, maxDistance))
-            maxDistance = hit.distance;
+        if(collides(ray, sphere, collision, 0.001f, maxDistance))
+            maxDistance = collision.distance;
     }
 
     if(maxDistance != FLT_MAX)
-        return {1.f, 0.f, 0.f};
+    {
+        ScatterData sdata;
+        sdata.inputRay = ray;
+        sdata.point = collision.point;
+        sdata.normal = collision.normal;
+
+        if(depth < 50 && collision.material->scatter(sdata))
+            return sdata.attenuation * getRayColor(sdata.outputRay, depth + 1, spheres);
+
+        return vec3(0.f);
+    }
 
     // background
     float t = (ray.dir.y + 1.f) / 2.f;
     vec3 colorBot(1.f);
-    vec3 colorTop(0.0f, 0.0f, 1.f);
+    vec3 colorTop(0.5f, 0.7f, 1.f);
     return (1.f - t) * colorBot + t * colorTop;
 }
 
-int main()
+struct Lambertian: public Material
+{
+    bool scatter(ScatterData& sdata) override
+    {
+        vec3 target = sdata.point + sdata.normal + unitSphereSample();
+        vec3 dir = normalize(target - sdata.point);
+        sdata.outputRay = {sdata.point, dir};
+        sdata.attenuation = albedo;
+        return true;
+    }
+
+    vec3 albedo;
+};
+
+struct Metal: public Material
+{
+    bool scatter(ScatterData& sdata) override
+    {
+        sdata.outputRay = {sdata.point,
+                           normalize( reflect(sdata.inputRay.dir, sdata.normal) + fuzz * unitSphereSample() )};
+
+        sdata.attenuation = albedo;
+        return dot(sdata.normal, sdata.outputRay.dir) > 0.f;
+    }
+
+    vec3 albedo;
+    float fuzz = 0.f;
+};
+
+static void initScene(Camera& camera, std::vector<Sphere>& spheres, std::vector<std::unique_ptr<Material>>& materials)
+{
+    camera.pos = vec3(0.f, 2.f, 3.f);
+    camera.dir = normalize(vec3(0.f) - camera.pos);
+    // to be sure...
+    camera.up = normalize(camera.up);
+
+    // materials
+    {
+        Lambertian mat;
+        mat.albedo = vec3(0.8f, 0.f, 0.f);
+        materials.push_back(std::make_unique<Lambertian>(mat));
+    }
+    {
+        Metal mat;
+        mat.albedo = vec3(0.6f);
+        materials.push_back(std::make_unique<Metal>(mat));
+    }
+    {
+        Lambertian mat;
+        mat.albedo = vec3(0.8f, 0.3f, 0.3f);
+        materials.push_back(std::make_unique<Lambertian>(mat));
+    }
+    {
+        Metal mat;
+        mat.albedo = vec3(0.8f, 0.6f, 0.2f);
+        mat.fuzz = 0.3f;
+        materials.push_back(std::make_unique<Metal>(mat));
+    }
+
+    // spheres
+    {
+        Sphere sphere;
+        sphere.radius = 100.f;
+        sphere.pos = vec3(0.f, -100.f, 0.f);
+        sphere.material = &*materials[0];
+        spheres.push_back(sphere);
+    }
+    {
+        Sphere sphere;
+        sphere.radius = 1.5f;
+        sphere.pos = vec3(0.f, 1.f, -3.f);
+        sphere.material = &*materials[1];
+        spheres.push_back(sphere);
+    }
+    {
+        Sphere sphere;
+        sphere.radius = 1.f;
+        sphere.pos = vec3(-4.f, 1.1f, -2.f);
+        sphere.material = &*materials[2];
+        spheres.push_back(sphere);
+    }
+    {
+        Sphere sphere;
+        sphere.radius = 1.f;
+        sphere.pos = vec3(3.5f, 1.1f, -2.f);
+        sphere.material = &*materials[3];
+        spheres.push_back(sphere);
+    }
+}
+
+int main(int argc, const char**)
 {
     std::mt19937 rng;
-
+    _rng = &rng;
     {
         std::random_device rd;
         rng.seed(rd());
@@ -247,32 +386,17 @@ int main()
 
     std::vector<vec3> fragments;
     ivec2 imageSize = {1920, 1080};
-    float perFragSamples = 20;
+    float perFragSamples = argc > 1 ? 100 : 10;
     fragments.resize(imageSize.x * imageSize.y);
 
     for(vec3& v: fragments)
         v = vec3(0.f);
 
     Camera camera;
-
-    // to be sure...
-    camera.dir = normalize(camera.dir);
-    camera.up = normalize(camera.up);
-
     std::vector<Sphere> spheres;
+    std::vector<std::unique_ptr<Material>> materials;
 
-    {
-        Sphere sphere;
-        sphere.pos = vec3(0.f, 0.f, -3.f);
-        sphere.radius = 1.5f;
-        spheres.push_back(sphere);
-    }
-    {
-        Sphere sphere;
-        sphere.pos = vec3(0.f, -100.f, 0.f);
-        sphere.radius = 99.f;
-        spheres.push_back(sphere);
-    }
+    initScene(camera, spheres, materials);
 
     for(int y = 0; y < imageSize.y; ++y)
     {
@@ -282,8 +406,8 @@ int main()
 
             for(int s = 0; s < perFragSamples; ++s)
             {
-                const Ray ray = getCameraRay(camera, vec2(x, y) + vec2(random01(rng), random01(rng)), imageSize);
-                fragColor += getRayColor(ray, spheres);
+                const Ray ray = getCameraRay(camera, vec2(x, y) + vec2(random01(), random01()), imageSize);
+                fragColor += getRayColor(ray, 0, spheres);
             }
 
             fragments[y * imageSize.x + x] = fragColor / perFragSamples;
