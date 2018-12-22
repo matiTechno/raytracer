@@ -2,6 +2,8 @@
 #include <assert.h>
 #include <vector>
 #include <math.h>
+#include <float.h>
+#include <random>
 
 #define PI 3.14159265359f
 
@@ -101,6 +103,12 @@ using vec3 = tvec3<float>;
 using ivec2 = tvec2<int>;
 using vec2 = tvec2<float>;
 
+template<typename T>
+T max(T a, T b) { return a > b ? a : b; }
+
+template<typename T>
+T min(T a, T b) { return a < b ? a : b; }
+
 static float dot(vec3 v1, vec3 v2) { return v1.x * v2.x + v1.y * v2.y + v1.z * v2.z; }
 static float length(vec3 v)   { return sqrtf(v.x * v.x + v.y * v.y + v.z * v.z); }
 static vec3 normalize(vec3 v) { return v * (1.f / length(v)); }
@@ -116,6 +124,12 @@ struct mat3
 static vec3 operator*(const mat3& m, vec3 v) { return v.x * m.i + v.y * m.j + v.z * m.k; }
 
 static float toRadians(float degrees) { return degrees / 360.f * 2.f * PI; }
+
+float random01(std::mt19937& rng)
+{
+    static std::uniform_real_distribution<float> d(0.f, 1.f);
+    return d(rng);
+}
 
 static void writeToFile(const char* filename, const vec3* data, const ivec2 size)
 {
@@ -137,12 +151,6 @@ struct Ray
     vec3 dir;
 };
 
-struct Sphere
-{
-    vec3 pos;
-    float radius;
-};
-
 // dir and up must be normalized
 struct Camera
 {
@@ -152,13 +160,13 @@ struct Camera
     float hfovy = 45.f; // half of field of view in y-axis angle; in degrees
 };
 
-static Ray getCameraRay(const Camera& camera, ivec2 fragPos, ivec2 imageSize)
+static Ray getCameraRay(const Camera& camera, vec2 fragPos, ivec2 imageSize)
 {
     float aspectRatio = float(imageSize.x) / imageSize.y;
 
     vec3 offset;
-    offset.x = ((fragPos.x / float(imageSize.x)) * 2.f - 1.f) * aspectRatio;
-    offset.y = -1.f * ((fragPos.y / float(imageSize.y)) * 2.f - 1.f);
+    offset.x = ((fragPos.x / imageSize.x) * 2.f - 1.f) * aspectRatio;
+    offset.y = -1.f * ((fragPos.y / imageSize.y) * 2.f - 1.f);
     offset.z = 1.f / tanf(toRadians(camera.hfovy));
 
     vec3 right = normalize(cross(camera.dir, camera.up));
@@ -167,20 +175,79 @@ static Ray getCameraRay(const Camera& camera, ivec2 fragPos, ivec2 imageSize)
     return {camera.pos, normalize(mat3{right, up, camera.dir} * offset)};
 }
 
-static bool hit(const Sphere& sphere, const Ray& ray)
+struct Hit
+{
+    float distance;
+    vec3 point;
+    vec3 normal;
+};
+
+struct Sphere
+{
+    vec3 pos;
+    float radius;
+};
+
+static bool hits(const Ray& ray, const Sphere& sphere, Hit& hit, float maxDistance)
 {
     vec3 sphereToRay = ray.origin - sphere.pos;
     float a = dot(ray.dir, ray.dir);
     float b = 2.f * dot(sphereToRay, ray.dir);
     float c = dot(sphereToRay, sphereToRay) - sphere.radius * sphere.radius;
     float discriminant = b * b - 4.f * a * c;
-    return discriminant >= 0.f;
+
+    if(discriminant > 0.f)
+    {
+        for(int i = 0; i < 2; ++i)
+        {
+            int sign = i * 2 - 1;
+            float root = (-b + sign * sqrtf(discriminant)) / 2.f;
+
+            if(root <= maxDistance && root > 0.f)
+            {
+                hit.distance = root;
+                hit.point = ray.origin + ray.dir * root;
+                hit.normal = normalize(hit.point - sphere.pos);
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+static vec3 getRayColor(const Ray& ray, const std::vector<Sphere>& spheres)
+{
+    float maxDistance = FLT_MAX;
+    Hit hit;
+
+    for(const Sphere& sphere: spheres)
+    {
+        if(hits(ray, sphere, hit, maxDistance))
+            maxDistance = hit.distance;
+    }
+
+    if(maxDistance != FLT_MAX)
+        return {1.f, 0.f, 0.f};
+
+    // background
+    float t = (ray.dir.y + 1.f) / 2.f;
+    vec3 colorBot(1.f);
+    vec3 colorTop(0.0f, 0.0f, 1.f);
+    return (1.f - t) * colorBot + t * colorTop;
 }
 
 int main()
 {
+    std::mt19937 rng;
+
+    {
+        std::random_device rd;
+        rng.seed(rd());
+    }
+
     std::vector<vec3> fragments;
     ivec2 imageSize = {1920, 1080};
+    float perFragSamples = 20;
     fragments.resize(imageSize.x * imageSize.y);
 
     for(vec3& v: fragments)
@@ -192,23 +259,45 @@ int main()
     camera.dir = normalize(camera.dir);
     camera.up = normalize(camera.up);
 
-    Sphere sphere;
-    sphere.pos = vec3(0.f, 0.f, -3.f);
-    sphere.radius = 1.5f;
+    std::vector<Sphere> spheres;
+
+    {
+        Sphere sphere;
+        sphere.pos = vec3(0.f, 0.f, -3.f);
+        sphere.radius = 1.5f;
+        spheres.push_back(sphere);
+    }
+    {
+        Sphere sphere;
+        sphere.pos = vec3(0.f, -100.f, 0.f);
+        sphere.radius = 99.f;
+        spheres.push_back(sphere);
+    }
 
     for(int y = 0; y < imageSize.y; ++y)
     {
         for(int x = 0; x < imageSize.x; ++x)
         {
-            Ray ray = getCameraRay(camera, {x, y}, imageSize);
+            vec3 fragColor(0.f);
 
-            if(hit(sphere, ray))
-                fragments[y * imageSize.x + x] = vec3(1.f, 0.f, 0.f);
+            for(int s = 0; s < perFragSamples; ++s)
+            {
+                const Ray ray = getCameraRay(camera, vec2(x, y) + vec2(random01(rng), random01(rng)), imageSize);
+                fragColor += getRayColor(ray, spheres);
+            }
+
+            fragments[y * imageSize.x + x] = fragColor / perFragSamples;
         }
     }
 
     // tone mapping
     // ...
+    // for now
+    for(vec3& v: fragments)
+    {
+        for(int i = 0; i < 3; ++i)
+            v[i] = min(v[i], 1.f);
+    }
 
     // convert to sRGB
     for(vec3& v: fragments)
