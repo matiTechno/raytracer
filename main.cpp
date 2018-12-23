@@ -114,8 +114,15 @@ static float dot(vec3 v1, vec3 v2) { return v1.x * v2.x + v1.y * v2.y + v1.z * v
 static float length(vec3 v)   { return sqrtf(v.x * v.x + v.y * v.y + v.z * v.z); }
 static vec3 normalize(vec3 v) { return v * (1.f / length(v)); }
 static vec3 cross(vec3 v, vec3 w) { return { v.y * w.z - v.z * w.y, v.z * w.x - v.x * w.z, v.x * w.y - v.y * w.x }; }
+
 // n must be normalized
 static vec3 reflect(vec3 toReflect, vec3 n) { return dot(toReflect, n) * n * -2.f + toReflect; }
+
+// ior - index of refraction
+static vec3 refract(vec3 toRefract, vec3 n, float ior)
+{
+
+}
 
 struct mat3
 {
@@ -183,15 +190,17 @@ static Ray getCameraRay(const Camera& camera, vec2 fragPos, ivec2 imageSize)
 {
     float aspectRatio = float(imageSize.x) / imageSize.y;
 
-    vec3 offset;
-    offset.x = ((fragPos.x / imageSize.x) * 2.f - 1.f) * aspectRatio;
-    offset.y = -1.f * ((fragPos.y / imageSize.y) * 2.f - 1.f);
-    offset.z = 1.f / tanf(toRadians(camera.hfovy));
+    // in camera space
+    vec3 sensorPos;
+    sensorPos.x = ((fragPos.x / imageSize.x) * 2.f - 1.f) * aspectRatio;
+    sensorPos.y = -1.f * ((fragPos.y / imageSize.y) * 2.f - 1.f);
+    sensorPos.z = 1.f / tanf(toRadians(camera.hfovy));
 
     vec3 right = normalize(cross(camera.dir, camera.up));
     vec3 up = cross(right, camera.dir);
 
-    return {camera.pos, normalize(mat3{right, up, camera.dir} * offset)};
+    //                  convert to world coordinates
+    return {camera.pos, normalize(mat3{right, up, camera.dir} * sensorPos)};
 }
 
 struct ScatterData
@@ -272,7 +281,7 @@ static vec3 getRayColor(const Ray& ray, int depth, const std::vector<Sphere>& sp
         sdata.point = collision.point;
         sdata.normal = collision.normal;
 
-        if(depth < 50 && collision.material->scatter(sdata))
+        if(depth < 9 && collision.material->scatter(sdata))
             return sdata.attenuation * getRayColor(sdata.outputRay, depth + 1, spheres);
 
         return vec3(0.f);
@@ -312,6 +321,13 @@ struct Metal: public Material
 
     vec3 albedo;
     float fuzz = 0.f;
+};
+
+struct Dielectric: public Material
+{
+    bool scatter(ScatterData& sdata) override
+    {
+    }
 };
 
 static void initScene(Camera& camera, std::vector<Sphere>& spheres, std::vector<std::unique_ptr<Material>>& materials)
@@ -371,6 +387,21 @@ static void initScene(Camera& camera, std::vector<Sphere>& spheres, std::vector<
         sphere.radius = 1.f;
         sphere.pos = vec3(3.5f, 1.1f, -2.f);
         sphere.material = &*materials[3];
+        spheres.push_back(sphere);
+    }
+
+    // x - start, y - size (this is not intuitive)
+    vec2 xrange(-3.f, 6.f);
+    vec2 yrange(0.5f, 0.5f);
+    vec2 zrange(-3.f, 5.f);
+    vec2 radiusRange(0.05f, 0.1f);
+
+    for(int i = 0; i < 100; ++i)
+    {
+        Sphere sphere;
+        sphere.radius = radiusRange.x + radiusRange.y * random01();
+        sphere.pos = vec3(xrange.x, yrange.x, zrange.x) + vec3(random01() * xrange.y, random01() * yrange.y, random01() * zrange.y);
+        sphere.material = random01() > 0.5f ? &*materials[1] : &*materials[3];
         spheres.push_back(sphere);
     }
 }
