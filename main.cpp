@@ -5,6 +5,9 @@
 #include <float.h>
 #include <random>
 #include <memory>
+#include <pthread.h>
+#include <string.h>
+#include <sys/sysinfo.h>
 
 #define PI 3.14159265359f
 
@@ -135,7 +138,7 @@ static vec3 operator*(const mat3& m, vec3 v) { return v.x * m.i + v.y * m.j + v.
 
 static float toRadians(float degrees) { return degrees / 360.f * 2.f * PI; }
 
-static std::mt19937* _rng = nullptr;
+static __thread std::mt19937* _rng = nullptr;
 
 float random01()
 {
@@ -406,6 +409,90 @@ static void initScene(Camera& camera, std::vector<Sphere>& spheres, std::vector<
     }
 }
 
+struct JobData
+{
+    ivec2 renderSize;
+    vec3* fragments;
+    int samplesPerFrag;
+    std::vector<Sphere>* spheres;
+    Camera* camera;
+};
+
+#define PX_CHUNK_SIZE 24
+
+struct
+{
+    // todo: replace it with gcc atomic operations
+    pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
+    int pixelId = 0;
+} static _progress;
+
+static void* job(void* data)
+{
+    std::mt19937 rng;
+    _rng = &rng;
+    {
+        std::random_device rd;
+        rng.seed(rd());
+    }
+
+    JobData* jobData = (JobData*)data;
+    const int pixelCount = jobData->renderSize.x * jobData->renderSize.y;
+
+    while(true)
+    {
+        pthread_mutex_lock(&_progress.mutex);
+        int start = _progress.pixelId;
+        _progress.pixelId += PX_CHUNK_SIZE;
+        pthread_mutex_unlock(&_progress.mutex);
+
+        if(start >= pixelCount)
+            break;
+
+        int pixelsToRender = min(PX_CHUNK_SIZE, pixelCount - start);
+
+        vec3 fragmentsLocal[PX_CHUNK_SIZE] = {};
+
+        for(int i = 0; i < pixelsToRender; ++i)
+        {
+            ivec2 pixelPos = {(start + i) % jobData->renderSize.x, (start + i) / jobData->renderSize.x};
+            vec3 fragColor(0.f);
+
+            for(int s = 0; s < jobData->samplesPerFrag; ++s)
+            {
+                const Ray ray = getCameraRay(*jobData->camera, vec2(pixelPos) + vec2(random01(), random01()), jobData->renderSize);
+                fragColor += getRayColor(ray, 0, *jobData->spheres);
+            }
+
+            fragmentsLocal[i] = fragColor / jobData->samplesPerFrag;
+        }
+
+        // tone mapping
+        // ...
+        // for now
+        for(int it = 0; it < pixelsToRender; ++it)
+        {
+            vec3& v = fragmentsLocal[it];
+
+            for(int i = 0; i < 3; ++i)
+                v[i] = min(v[i], 1.f);
+        }
+
+        // convert to sRGB
+        for(int it = 0; it < pixelsToRender; ++it)
+        {
+            vec3& v = fragmentsLocal[it];
+
+            for(int i = 0; i < 3; ++i)
+                v[i] = powf(v[i], 1.f / 2.2f);
+        }
+
+        memcpy(jobData->fragments + start, fragmentsLocal, pixelsToRender * sizeof(vec3));
+    }
+
+    return nullptr;
+}
+
 int main(int argc, const char**)
 {
     std::mt19937 rng;
@@ -417,7 +504,7 @@ int main(int argc, const char**)
 
     std::vector<vec3> fragments;
     ivec2 imageSize = {1920, 1080};
-    float perFragSamples = argc > 1 ? 100 : 10;
+    int perFragSamples = argc > 1 ? 100 : 10;
     fragments.resize(imageSize.x * imageSize.y);
 
     for(vec3& v: fragments)
@@ -429,36 +516,25 @@ int main(int argc, const char**)
 
     initScene(camera, spheres, materials);
 
-    for(int y = 0; y < imageSize.y; ++y)
+    JobData jobData;
+    jobData.renderSize = imageSize;
+    jobData.fragments = fragments.data();
+    jobData.samplesPerFrag = perFragSamples;
+    jobData.spheres = &spheres;
+    jobData.camera = &camera;
+
+    pthread_t threads[get_nprocs()];
+
+    for(pthread_t& thread: threads)
     {
-        for(int x = 0; x < imageSize.x; ++x)
-        {
-            vec3 fragColor(0.f);
-
-            for(int s = 0; s < perFragSamples; ++s)
-            {
-                const Ray ray = getCameraRay(camera, vec2(x, y) + vec2(random01(), random01()), imageSize);
-                fragColor += getRayColor(ray, 0, spheres);
-            }
-
-            fragments[y * imageSize.x + x] = fragColor / perFragSamples;
-        }
+        int r = pthread_create(&thread, nullptr, job, &jobData);
+        assert(!r);
     }
 
-    // tone mapping
-    // ...
-    // for now
-    for(vec3& v: fragments)
+    for(pthread_t& thread: threads)
     {
-        for(int i = 0; i < 3; ++i)
-            v[i] = min(v[i], 1.f);
-    }
-
-    // convert to sRGB
-    for(vec3& v: fragments)
-    {
-        for(int i = 0; i < 3; ++i)
-            v[i] = powf(v[i], 1.f / 2.2f);
+        int r = pthread_join(thread, nullptr);
+        assert(!r);
     }
 
     writeToFile("render.ppm", fragments.data(), imageSize);
