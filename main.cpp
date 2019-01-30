@@ -148,7 +148,7 @@ static __thread std::mt19937* _rng = nullptr;
 FORCE_INLINE static float random01()
 {
     assert(_rng);
-    static std::uniform_real_distribution<float> d(0.f, 1.f);
+    static __thread std::uniform_real_distribution<float> d(0.f, 1.f);
     return d(*_rng);
 }
 
