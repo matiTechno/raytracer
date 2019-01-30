@@ -8,6 +8,7 @@
 #include <pthread.h>
 #include <string.h>
 #include <sys/sysinfo.h>
+#include <atomic>
 
 #define PI 3.14159265359f
 
@@ -420,12 +421,7 @@ struct JobData
 
 #define PX_CHUNK_SIZE 24
 
-struct
-{
-    // todo: replace it with gcc atomic operations
-    pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
-    int pixelId = 0;
-} static _progress;
+static std::atomic_int _progress{0};
 
 static void* job(void* data)
 {
@@ -441,10 +437,7 @@ static void* job(void* data)
 
     while(true)
     {
-        pthread_mutex_lock(&_progress.mutex);
-        int start = _progress.pixelId;
-        _progress.pixelId += PX_CHUNK_SIZE;
-        pthread_mutex_unlock(&_progress.mutex);
+        int start = _progress.fetch_add(PX_CHUNK_SIZE);
 
         if(start >= pixelCount)
             break;
