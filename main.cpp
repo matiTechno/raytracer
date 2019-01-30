@@ -12,6 +12,8 @@
 
 #define PI 3.14159265359f
 
+#define FORCE_INLINE __attribute__((always_inline)) inline
+
 template<typename T>
 struct tvec2;
 
@@ -114,19 +116,21 @@ T max(T a, T b) { return a > b ? a : b; }
 template<typename T>
 T min(T a, T b) { return a < b ? a : b; }
 
-static float dot(vec3 v1, vec3 v2) { return v1.x * v2.x + v1.y * v2.y + v1.z * v2.z; }
-static float length(vec3 v)   { return sqrtf(v.x * v.x + v.y * v.y + v.z * v.z); }
-static vec3 normalize(vec3 v) { return v * (1.f / length(v)); }
-static vec3 cross(vec3 v, vec3 w) { return { v.y * w.z - v.z * w.y, v.z * w.x - v.x * w.z, v.x * w.y - v.y * w.x }; }
+FORCE_INLINE static float dot(vec3 v1, vec3 v2) { return v1.x * v2.x + v1.y * v2.y + v1.z * v2.z; }
+FORCE_INLINE static float length(vec3 v)   { return sqrtf(v.x * v.x + v.y * v.y + v.z * v.z); }
+FORCE_INLINE static vec3 normalize(vec3 v) { return v * (1.f / length(v)); }
+FORCE_INLINE static vec3 cross(vec3 v, vec3 w) { return { v.y * w.z - v.z * w.y, v.z * w.x - v.x * w.z, v.x * w.y - v.y * w.x }; }
 
 // n must be normalized
-static vec3 reflect(vec3 toReflect, vec3 n) { return dot(toReflect, n) * n * -2.f + toReflect; }
+FORCE_INLINE static vec3 reflect(vec3 toReflect, vec3 n) { return dot(toReflect, n) * n * -2.f + toReflect; }
 
+/*
 // ior - index of refraction
 static vec3 refract(vec3 toRefract, vec3 n, float ior)
 {
 
 }
+*/
 
 struct mat3
 {
@@ -135,13 +139,13 @@ struct mat3
     vec3 k;
 };
 
-static vec3 operator*(const mat3& m, vec3 v) { return v.x * m.i + v.y * m.j + v.z * m.k; }
+FORCE_INLINE static vec3 operator*(const mat3& m, vec3 v) { return v.x * m.i + v.y * m.j + v.z * m.k; }
 
-static float toRadians(float degrees) { return degrees / 360.f * 2.f * PI; }
+FORCE_INLINE static float toRadians(float degrees) { return degrees / 360.f * 2.f * PI; }
 
 static __thread std::mt19937* _rng = nullptr;
 
-float random01()
+FORCE_INLINE static float random01()
 {
     assert(_rng);
     static std::uniform_real_distribution<float> d(0.f, 1.f);
@@ -162,7 +166,7 @@ static void writeToFile(const char* filename, const vec3* data, const ivec2 size
     fclose(file);
 }
 
-static vec3 unitSphereSample()
+FORCE_INLINE static vec3 unitSphereSample()
 {
     vec3 p(1.f);
 
@@ -190,7 +194,7 @@ struct Camera
     float hfovy = 45.f; // half of field of view in y-axis angle; in degrees
 };
 
-static Ray getCameraRay(const Camera& camera, vec2 fragPos, ivec2 imageSize)
+FORCE_INLINE static Ray getCameraRay(const Camera& camera, vec2 fragPos, ivec2 imageSize)
 {
     float aspectRatio = float(imageSize.x) / imageSize.y;
 
@@ -239,7 +243,7 @@ struct Sphere
     Material* material;
 };
 
-static bool collides(const Ray& ray, const Sphere& sphere, Collision& collision, float minDistance, float maxDistance)
+FORCE_INLINE static bool collides(const Ray& ray, const Sphere& sphere, Collision& collision, float minDistance, float maxDistance)
 {
     vec3 sphereToRay = ray.origin - sphere.pos;
     float a = dot(ray.dir, ray.dir);
@@ -327,12 +331,14 @@ struct Metal: public Material
     float fuzz = 0.f;
 };
 
+/*
 struct Dielectric: public Material
 {
     bool scatter(ScatterData& sdata) override
     {
     }
 };
+*/
 
 static void initScene(Camera& camera, std::vector<Sphere>& spheres, std::vector<std::unique_ptr<Material>>& materials)
 {
@@ -419,7 +425,8 @@ struct JobData
     Camera* camera;
 };
 
-#define PX_CHUNK_SIZE 24
+// it seems that this is not affecting anything... I don't know why
+#define PX_CHUNK_SIZE 16
 
 static std::atomic_int _progress{0};
 
@@ -432,6 +439,7 @@ static void* job(void* data)
         rng.seed(rd());
     }
 
+    vec3 fragmentsLocal[PX_CHUNK_SIZE];
     JobData* jobData = (JobData*)data;
     const int pixelCount = jobData->renderSize.x * jobData->renderSize.y;
 
@@ -442,9 +450,7 @@ static void* job(void* data)
         if(start >= pixelCount)
             break;
 
-        int pixelsToRender = min(PX_CHUNK_SIZE, pixelCount - start);
-
-        vec3 fragmentsLocal[PX_CHUNK_SIZE] = {};
+        const int pixelsToRender = min(PX_CHUNK_SIZE, pixelCount - start);
 
         for(int i = 0; i < pixelsToRender; ++i)
         {
@@ -460,22 +466,15 @@ static void* job(void* data)
             fragmentsLocal[i] = fragColor / jobData->samplesPerFrag;
         }
 
-        // tone mapping
-        // ...
-        // for now
         for(int it = 0; it < pixelsToRender; ++it)
         {
             vec3& v = fragmentsLocal[it];
 
+            // temporary, clamp color to 1.f (replace with tone mapping)
             for(int i = 0; i < 3; ++i)
                 v[i] = min(v[i], 1.f);
-        }
 
-        // convert to sRGB
-        for(int it = 0; it < pixelsToRender; ++it)
-        {
-            vec3& v = fragmentsLocal[it];
-
+            // convert to sRGB
             for(int i = 0; i < 3; ++i)
                 v[i] = powf(v[i], 1.f / 2.2f);
         }
@@ -522,12 +521,14 @@ int main(int argc, const char**)
     {
         int r = pthread_create(&thread, nullptr, job, &jobData);
         assert(!r);
+        (void)r;
     }
 
     for(pthread_t& thread: threads)
     {
         int r = pthread_join(thread, nullptr);
         assert(!r);
+        (void)r;
     }
 
     writeToFile("render.ppm", fragments.data(), imageSize);
