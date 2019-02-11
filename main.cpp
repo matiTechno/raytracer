@@ -8,7 +8,6 @@
 #include <pthread.h>
 #include <string.h>
 #include <sys/sysinfo.h>
-#include <atomic>
 
 #define PI 3.14159265359f
 
@@ -428,7 +427,7 @@ struct JobData
 // it seems that this is not affecting anything... I don't know why
 #define PX_CHUNK_SIZE 16
 
-static std::atomic_int _progress{0};
+static int _progress = 0;
 
 static void* job(void* data)
 {
@@ -445,7 +444,7 @@ static void* job(void* data)
 
     while(true)
     {
-        int start = _progress.fetch_add(PX_CHUNK_SIZE);
+        int start = __sync_fetch_and_add(&_progress, PX_CHUNK_SIZE);
 
         if(start >= pixelCount)
             break;
