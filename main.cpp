@@ -13,6 +13,7 @@
 
 #define FORCE_INLINE __attribute__((always_inline)) inline
 
+// should I use FORCE_INLINE on tvec2 and tvec3 functions or is it unnecessary boilerplate
 template<typename T>
 struct tvec2;
 
@@ -110,22 +111,22 @@ using ivec2 = tvec2<int>;
 using vec2 = tvec2<float>;
 
 template<typename T>
-T max(T a, T b) { return a > b ? a : b; }
+FORCE_INLINE T max(T a, T b) { return a > b ? a : b; }
 
 template<typename T>
-T min(T a, T b) { return a < b ? a : b; }
+FORCE_INLINE T min(T a, T b) { return a < b ? a : b; }
 
-FORCE_INLINE static float dot(vec3 v1, vec3 v2) { return v1.x * v2.x + v1.y * v2.y + v1.z * v2.z; }
-FORCE_INLINE static float length(vec3 v)   { return sqrtf(v.x * v.x + v.y * v.y + v.z * v.z); }
-FORCE_INLINE static vec3 normalize(vec3 v) { return v * (1.f / length(v)); }
-FORCE_INLINE static vec3 cross(vec3 v, vec3 w) { return { v.y * w.z - v.z * w.y, v.z * w.x - v.x * w.z, v.x * w.y - v.y * w.x }; }
+FORCE_INLINE float dot(vec3 v1, vec3 v2) { return v1.x * v2.x + v1.y * v2.y + v1.z * v2.z; }
+FORCE_INLINE float length(vec3 v)   { return sqrtf(v.x * v.x + v.y * v.y + v.z * v.z); }
+FORCE_INLINE vec3 normalize(vec3 v) { return v * (1.f / length(v)); }
+FORCE_INLINE vec3 cross(vec3 v, vec3 w) { return { v.y * w.z - v.z * w.y, v.z * w.x - v.x * w.z, v.x * w.y - v.y * w.x }; }
 
 // n must be normalized
-FORCE_INLINE static vec3 reflect(vec3 toReflect, vec3 n) { return dot(toReflect, n) * n * -2.f + toReflect; }
+FORCE_INLINE vec3 reflect(vec3 toReflect, vec3 n) { return dot(toReflect, n) * n * -2.f + toReflect; }
 
 /*
 // ior - index of refraction
-static vec3 refract(vec3 toRefract, vec3 n, float ior)
+vec3 refract(vec3 toRefract, vec3 n, float ior)
 {
 
 }
@@ -138,16 +139,16 @@ struct mat3
     vec3 k;
 };
 
-FORCE_INLINE static vec3 operator*(const mat3& m, vec3 v) { return v.x * m.i + v.y * m.j + v.z * m.k; }
+FORCE_INLINE vec3 operator*(const mat3& m, vec3 v) { return v.x * m.i + v.y * m.j + v.z * m.k; }
 
-FORCE_INLINE static float toRadians(float degrees) { return degrees / 360.f * 2.f * PI; }
+FORCE_INLINE float toRadians(float degrees) { return degrees / 360.f * 2.f * PI; }
 
 static __thread std::mt19937* _rng = nullptr;
 
-FORCE_INLINE static float random01()
+FORCE_INLINE float random01()
 {
     assert(_rng);
-    static __thread std::uniform_real_distribution<float> d(0.f, 1.f);
+    std::uniform_real_distribution<float> d(0.f, 1.f);
     return d(*_rng);
 }
 
@@ -165,7 +166,7 @@ static void writeToFile(const char* filename, const vec3* data, const ivec2 size
     fclose(file);
 }
 
-FORCE_INLINE static vec3 unitSphereSample()
+FORCE_INLINE vec3 unitSphereSample()
 {
     vec3 p(1.f);
 
@@ -193,7 +194,7 @@ struct Camera
     float hfovy = 45.f; // half of field of view in y-axis angle; in degrees
 };
 
-FORCE_INLINE static Ray getCameraRay(const Camera& camera, vec2 fragPos, ivec2 imageSize)
+FORCE_INLINE Ray getCameraRay(const Camera& camera, vec2 fragPos, ivec2 imageSize)
 {
     float aspectRatio = float(imageSize.x) / imageSize.y;
 
@@ -242,7 +243,7 @@ struct Sphere
     Material* material;
 };
 
-FORCE_INLINE static bool collides(const Ray& ray, const Sphere& sphere, Collision& collision, float minDistance, float maxDistance)
+FORCE_INLINE bool collides(const Ray& ray, const Sphere& sphere, Collision& collision, float minDistance, float maxDistance)
 {
     vec3 sphereToRay = ray.origin - sphere.pos;
     float a = dot(ray.dir, ray.dir);
